@@ -9,93 +9,130 @@ from PIL import Image
 
 st.set_page_config(layout="wide")
 
-query_params = st.experimental_get_query_params()
-
-selected_language = st.session_state["language"]
-
-
-def update_params():
-    st.experimental_set_query_params(
-        challenge=st.session_state.day)
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+import joblib
+import plotly.express as px
 
 
-def format_day(label):
-    return _("Day {day}").format(day=int(re.search(r'\d+', label).group()))
+# Load the dataset
+df = pd.read_csv('drug.csv')
 
+# Data preprocessing
+def preprocess_data(df):
+    df['Sex'] = df['Sex'].apply(lambda x: 1 if x == 'M' else 0)
+    df['BP'] = df['BP'].map({'LOW': 0, 'NORMAL': 1, 'HIGH': 2})
+    df['Cholesterol'] = df['Cholesterol'].map({'NORMAL': 0, 'HIGH': 1})
+    df['Drug'] = df['Drug'].map({'drugA': 0, 'drugB': 1, 'drugC': 2, 'drugX': 3, 'drugY': 4})
+    return df
 
-md_files = sorted(
-    [int(x.strip("Day").strip(".md")) for x in glob.glob1(f"content/{selected_language}", "*.md")]
-)
+df = preprocess_data(df)
 
-placeholder = st.empty()
-with placeholder:
-    st.write(_("Day {day}").format(day=1))
-placeholder.empty()
+# Model building
+X = df[['Age', 'Sex', 'BP', 'Cholesterol', 'Na_to_K']]
+y = df['Drug']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
 
-# Logo and Navigation
-col1, col2, col3 = st.columns((1, 4, 1))
-with col2:
-    st.image(Image.open("streamlit-logo-secondary-colormark-darktext.png"))
-st.markdown(_("# 30 Days of Streamlit"))
+# Train and save the model if not already saved
+model_path = 'drug.pkl'
+try:
+    loaded_model = joblib.load(model_path)
+    if not isinstance(loaded_model, DecisionTreeClassifier):
+        raise ValueError("Loaded model is not a DecisionTreeClassifier")
+except (FileNotFoundError, ValueError):
+    model = DecisionTreeClassifier(random_state=0)
+    model.fit(X_train, y_train)
+    joblib.dump(model, model_path)
+    loaded_model = model
 
-days_list = [f"Day{x}" for x in md_files]
-
-if query_params:
-    try:
-        selected_day = query_params["challenge"][0]
-        if selected_day in days_list:
-            st.session_state.day = selected_day
-    except KeyError:
-        st.session_state.day = days_list[0]
-
-selected_day = st.selectbox(
-    _("Start the Challenge 👇"), days_list, key="day", on_change=update_params,
-    format_func=format_day
-)
-
-with st.expander(_("About the #30DaysOfStreamlit")):
-    st.markdown(_(
-        """
-    The **#30DaysOfStreamlit** is a coding challenge designed to help you get started in building Streamlit apps.
-    
-    Particularly, you'll be able to:
-    - Set up a coding environment for building Streamlit apps
-    - Build your first Streamlit app
-    - Learn about all the awesome input/output widgets to use for your Streamlit app
-    """
-    ))
+# Streamlit app
+st.title('Drug Classification App')
 
 # Sidebar
-st.sidebar.header(_("About"))
-st.sidebar.markdown(_(
-    "[Streamlit](https://streamlit.io) is a Python library that allows the creation of interactive, data-driven web applications in Python."
-))
+st.sidebar.header('Patient Information')
+age = st.sidebar.slider('Age', 15, 75, 50)
+sex = st.sidebar.selectbox('Sex', ['Female', 'Male'])
+sex = 1 if sex == 'Male' else 0
+bp = st.sidebar.selectbox('Blood Pressure', ['LOW', 'NORMAL', 'HIGH'])
+bp = {'LOW': 0, 'NORMAL': 1, 'HIGH': 2}[bp]
+cholesterol = st.sidebar.selectbox('Cholesterol', ['NORMAL', 'HIGH'])
+cholesterol = 1 if cholesterol == 'HIGH' else 0
+na_to_k = st.sidebar.slider('Na_to_K', 5.0, 40.0, 15.0)
 
-st.sidebar.header(_("Resources"))
-st.sidebar.markdown(_(
-    """
-- [Streamlit Documentation](https://docs.streamlit.io/)
-- [Cheat sheet](https://docs.streamlit.io/library/cheatsheet)
-- [Book](https://www.amazon.com/dp/180056550X) (Getting Started with Streamlit for Data Science)
-- [Blog](https://blog.streamlit.io/how-to-master-streamlit-for-data-science/) (How to master Streamlit for data science)
-"""
-))
+# Prediction
+new_patient = pd.DataFrame({
+    'Age': [age],
+    'Sex': [sex],
+    'BP': [bp],
+    'Cholesterol': [cholesterol],
+    'Na_to_K': [na_to_k]
+})
 
-st.sidebar.header(_("Deploy"))
-st.sidebar.markdown(_(
-    "You can quickly deploy Streamlit apps using [Streamlit Community Cloud](https://streamlit.io/cloud) in just a few clicks."
-))
+# Debug: Display the new patient data
+st.write("New patient data for prediction:")
+st.write(new_patient)
 
-# Display content
-for day in days_list:
-    if selected_day == day:
-        st.markdown(_("# 🗓️ Which {day_num}").format(day_num=int(re.search(r'\d+', day).group())))
-        with open(f"content/{selected_language}/{day}.md", "r") as f:
-            st.markdown(f.read())
-        if os.path.isfile(f"content/{selected_language}/figures/{day}.csv"):
-            st.markdown("---")
-            st.markdown(_("### Figures"))
-            df = pd.read_csv(f"content/{selected_language}/figures/{day}.csv", engine="python")
-            for i in range(len(df)):
-                st.image(f"content/{selected_language}/images/{df.img[i]}")
-                st.info(f"{df.figure[i]}: {df.caption[i]}")
+try:
+    prediction = loaded_model.predict(new_patient)[0]
+    predicted_drug = {0: 'drugA', 1: 'drugB', 2: 'drugC', 3: 'drugX', 4: 'drugY'}[prediction]
+
+    # Display prediction
+    st.subheader('Prediction')
+    st.write(f'The predicted drug for the patient is: {predicted_drug}')
+except Exception as e:
+    st.write(f"An error occurred during prediction: {e}")
+
+# Debug: Display model type
+st.write(f"Loaded model type: {type(loaded_model)}")
+
+
+required_columns = ['Age', 'Sex', 'BP', 'Cholesterol', 'Na_to_K']
+mmodel = joblib.load(model_path)
+
+
+if all(column in df.columns for column in required_columns):
+    # Predict the customer group
+    X = df[required_columns]
+    predictions = mmodel.predict(X)
+    df['Drug_pred'] = predictions
+
+    st.write("Predictions:")
+    st.write(df[['Age', 'Sex', 'BP', 'Cholesterol', 'Na_to_K', 'Drug', 'Drug_pred']])
+
+
+
+# Graphs
+st.subheader("Visualizations")
+    
+# Histogram of Age
+fig_age = px.histogram(df, x='Age', nbins=20, title='Age Distribution')
+st.plotly_chart(fig_age)
+    
+# Histogram of Na_to_K
+fig_na_to_k = px.histogram(df, x='Na_to_K', nbins=20, title='Na_to_K Distribution')
+st.plotly_chart(fig_na_to_k)
+
+# Bar plot of Sex
+sex_counts = df['Sex'].value_counts().reset_index()
+sex_counts.columns = ['Sex', 'Count']
+fig_sex = px.bar(sex_counts, x='Sex', y='Count', labels={'Sex': 'Sex', 'Count': 'Count'}, title='Sex Distribution')
+st.plotly_chart(fig_sex)
+    
+# Bar plot of BP
+bp_counts = df['BP'].value_counts().reset_index()
+bp_counts.columns = ['BP', 'Count']
+fig_bp = px.bar(bp_counts, x='BP', y='Count', labels={'BP': 'Blood Pressure', 'Count': 'Count'}, title='Blood Pressure Distribution')
+st.plotly_chart(fig_bp)
+    
+# Bar plot of Cholesterol
+cholesterol_counts = df['Cholesterol'].value_counts().reset_index()
+cholesterol_counts.columns = ['Cholesterol', 'Count']
+fig_cholesterol = px.bar(cholesterol_counts, x='Cholesterol', y='Count', labels={'Cholesterol': 'Cholesterol', 'Count': 'Count'}, title='Cholesterol Distribution')
+st.plotly_chart(fig_cholesterol)
+    
+# Bar plot of Drug
+drug_counts = df['Drug'].value_counts().reset_index()
+drug_counts.columns = ['Drug', 'Count']
+fig_drug = px.bar(drug_counts, x='Drug', y='Count', labels={'Drug': 'Drug', 'Count': 'Count'}, title='Drug Distribution')
+st.plotly_chart(fig_drug)
